@@ -1,36 +1,54 @@
 # Cochin Distillaries
 
-## Getting Started
+Members portal built with Next.js 16 (App Router), Supabase (auth + Postgres) and Tailwind CSS. Deployed on Vercel. Stripe subscriptions come later.
 
-First, run the development server:
+## What's here
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+| Route | Access | Purpose |
+| --- | --- | --- |
+| `/` | public | Landing page |
+| `/products` | public | Spirits catalogue (members also see members-only releases) |
+| `/signup`, `/login` | signed out | Email + password auth, with a legal-drinking-age confirmation |
+| `/dashboard` | signed in | Membership status and members-only releases |
+| `/account` | signed in | Edit name and phone |
+| `/auth/confirm` | — | Landing point for Supabase email links |
+| `/auth/signout` | — | `POST` to sign out |
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Key files:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- `src/proxy.ts` + `src/lib/supabase/proxy.ts`: refreshes the Supabase session on every request and redirects signed-out users away from protected pages. (Next.js 16 renamed `middleware.ts` to `proxy.ts`.)
+- `src/lib/supabase/{server,client}.ts`: Supabase clients for server and browser code.
+- `src/lib/auth.ts`: `getCurrentUser()` / `requireUser()`. Protected pages and server actions call `requireUser()` themselves; the proxy check is only a fast path.
+- `supabase/migrations/`: database schema with row-level security.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Database
 
-## Learn More
+`supabase/migrations/20260923000000_init.sql` creates:
 
-To learn more about Next.js, take a look at the following resources:
+- **profiles**: one per user, created by a trigger on sign-up. Users can edit only `full_name` and `phone`.
+- **products**: the catalogue. Everyone sees active products; `members_only` products are visible only to users with an active subscription (enforced by RLS).
+- **subscriptions**: a mirror of Stripe subscriptions. Users can read their own; only the server (service-role key, from a Stripe webhook) writes to it.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+`supabase/seed.sql` adds three placeholder products.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Setup
 
-## Deploy on Vercel
+1. Create a Supabase project, then apply the schema, either with the CLI (`supabase link` then `supabase db push`) or by pasting the migration (and optionally the seed) into the SQL editor.
+2. Copy `.env.example` to `.env.local` and fill in the values from Supabase → Project Settings → API.
+3. In Supabase → Authentication → URL Configuration, set the **Site URL** and add these **Redirect URLs**:
+   - `http://localhost:3000/**`
+   - `https://<your-vercel-domain>/**`
+   - `https://*-<your-vercel-team>.vercel.app/**` (preview deployments)
+4. `npm install` then `npm run dev`.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Deploying to Vercel
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Import the repo in Vercel and add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` as environment variables (Production and Preview). No other build settings are needed.
+
+## Adding Stripe later
+
+The schema is ready for it: `profiles.stripe_customer_id` and the `subscriptions` table. You'll add:
+
+1. A server action that creates a Stripe Checkout session (subscription mode) for the signed-in user.
+2. A route handler at `/api/stripe/webhook` that verifies the signature and upserts `subscriptions` rows using a Supabase **service-role** client. That key must stay server-only (never `NEXT_PUBLIC_`).
+3. A link to the Stripe Customer Portal from `/account` for managing billing.
